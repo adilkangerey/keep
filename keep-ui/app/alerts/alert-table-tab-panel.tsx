@@ -1,6 +1,6 @@
   import { AlertTable } from "./alert-table";
   import { useAlertTableCols } from "./alert-table-utils";
-  import { AlertDto, AlertKnownKeys, Preset } from "./models";
+  import { AlertDto, AlertKnownKeys, Preset, getTabsFromPreset } from "./models";
 
   const getPresetAlerts = (alert: AlertDto, presetName: string): boolean => {
     if (presetName === "deleted") {
@@ -30,6 +30,7 @@
     setNoteModalAlert: (alert: AlertDto | null) => void;
     setRunWorkflowModalAlert: (alert: AlertDto | null) => void;
     setDismissModalAlert: (alert: AlertDto[] | null) => void;
+    setChangeStatusAlert: (alert: AlertDto | null) => void;
   }
 
   export default function AlertTableTabPanel({
@@ -40,6 +41,7 @@
     setNoteModalAlert,
     setRunWorkflowModalAlert,
     setDismissModalAlert,
+    setChangeStatusAlert,
   }: Props) {
     const sortedPresetAlerts = alerts
       .filter((alert) => getPresetAlerts(alert, preset.name))
@@ -74,9 +76,12 @@
       setNoteModalAlert: setNoteModalAlert,
       setRunWorkflowModalAlert: setRunWorkflowModalAlert,
       setDismissModalAlert: setDismissModalAlert,
+      setChangeStatusAlert: setChangeStatusAlert,
       presetName: preset.name,
       presetNoisy: preset.is_noisy,
     });
+
+    const presetTabs = getTabsFromPreset(preset);
 
     return (
       <AlertTable
@@ -87,6 +92,9 @@
           presetName={preset.name}
           presetPrivate={preset.is_private}
           presetNoisy={preset.is_noisy}
+          presetStatic={preset.name === "feed" || preset.name === "groups" || preset.name === "dismissed"}
+          presetId={preset.id}
+          presetTabs={presetTabs}
       />
     );
   }

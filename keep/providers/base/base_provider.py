@@ -18,7 +18,8 @@ from typing import Literal, Optional
 import opentelemetry.trace as trace
 import requests
 
-from keep.api.core.db import enrich_alert, get_enrichments
+from keep.api.bl.enrichments import EnrichmentsBl
+from keep.api.core.db import get_enrichments
 from keep.api.models.alert import AlertDto, AlertSeverity, AlertStatus
 from keep.api.utils.enrichment_helpers import parse_and_enrich_deleted_and_assignees
 from keep.contextmanager.contextmanager import ContextManager
@@ -33,9 +34,9 @@ class BaseProvider(metaclass=abc.ABCMeta):
     PROVIDER_SCOPES: list[ProviderScope] = []
     PROVIDER_METHODS: list[ProviderMethod] = []
     FINGERPRINT_FIELDS: list[str] = []
-    PROVIDER_TAGS: list[
-        Literal["alert", "ticketing", "messaging", "data", "queue"]
-    ] = []
+    PROVIDER_TAGS: list[Literal["alert", "ticketing", "messaging", "data", "queue"]] = (
+        []
+    )
 
     def __init__(
         self,
@@ -184,7 +185,9 @@ class BaseProvider(metaclass=abc.ABCMeta):
                 continue
         self.logger.info("Enriching alert", extra={"fingerprint": fingerprint})
         try:
-            enrich_alert(self.context_manager.tenant_id, fingerprint, _enrichments)
+            enrichments_bl = EnrichmentsBl(self.context_manager.tenant_id)
+            enrichments_bl.enrich_alert(fingerprint, _enrichments)
+
         except Exception as e:
             self.logger.error(
                 "Failed to enrich alert in db",
@@ -320,6 +323,7 @@ class BaseProvider(metaclass=abc.ABCMeta):
             # enrich alerts with provider id
             for alert in alerts:
                 alert.providerId = self.provider_id
+                alert.providerType = self.provider_type
             return alerts
 
     def get_alerts_by_fingerprint(self, tenant_id: str) -> dict[str, list[AlertDto]]:
@@ -329,7 +333,10 @@ class BaseProvider(metaclass=abc.ABCMeta):
         Returns:
             dict[str, list[AlertDto]]: A dict of alerts grouped by fingerprint, sorted by lastReceived.
         """
-        alerts = self.get_alerts()
+        try:
+            alerts = self.get_alerts()
+        except NotImplementedError:
+            return {}
 
         if not alerts:
             return {}
@@ -415,7 +422,7 @@ class BaseProvider(metaclass=abc.ABCMeta):
         raise NotImplementedError("oauth2_logic() method not implemented")
 
     @staticmethod
-    def parse_event_raw_body(raw_body: bytes) -> bytes:
+    def parse_event_raw_body(raw_body: bytes | dict) -> dict:
         """
         Parse the raw body of an event and create an ingestable dict from it.
 

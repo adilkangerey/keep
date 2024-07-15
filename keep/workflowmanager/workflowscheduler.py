@@ -1,6 +1,7 @@
 import enum
 import hashlib
 import logging
+import queue
 import threading
 import time
 import typing
@@ -61,8 +62,15 @@ class WorkflowScheduler:
                 tenant_id = workflow.get("tenant_id")
                 workflow_id = workflow.get("workflow_id")
                 workflow = self.workflow_store.get_workflow(tenant_id, workflow_id)
-            except ProviderConfigurationException as e:
-                self.logger.error(f"Provider configuration is invalid: {e}")
+            except ProviderConfigurationException:
+                self.logger.exception(
+                    "Provider configuration is invalid",
+                    extra={
+                        "workflow_id": workflow_id,
+                        "workflow_execution_id": workflow_execution_id,
+                        "tenant_id": tenant_id,
+                    },
+                )
                 self._finish_workflow_execution(
                     tenant_id=tenant_id,
                     workflow_id=workflow_id,
@@ -100,7 +108,7 @@ class WorkflowScheduler:
         try:
             # set the event context, e.g. the event that triggered the workflow
             workflow.context_manager.set_event_context(event_context)
-            errors = self.workflow_manager._run_workflow(
+            errors, _ = self.workflow_manager._run_workflow(
                 workflow, workflow_execution_id
             )
         except Exception as e:
@@ -133,6 +141,67 @@ class WorkflowScheduler:
             )
         self.logger.info(f"Workflow {workflow.workflow_id} ran")
 
+    def handle_workflow_test(self, workflow, tenant_id, triggered_by_user):
+
+        workflow_execution_id = self._get_unique_execution_number()
+
+        self.logger.info(
+            "Adding workflow to run",
+            extra={
+                "workflow_id": workflow.workflow_id,
+                "workflow_execution_id": workflow_execution_id,
+                "tenant_id": tenant_id,
+                "triggered_by": "manual",
+                "triggered_by_user": triggered_by_user,
+            },
+        )
+
+        result_queue = queue.Queue()
+
+        def run_workflow_wrapper(
+            run_workflow, workflow, workflow_execution_id, test_run, result_queue
+        ):
+            try:
+                errors, results = run_workflow(
+                    workflow, workflow_execution_id, test_run
+                )
+                result_queue.put((errors, results))
+            except Exception as e:
+                print(f"Exception in workflow: {e}")
+                result_queue.put((str(e), None))
+
+        thread = threading.Thread(
+            target=run_workflow_wrapper,
+            args=[
+                self.workflow_manager._run_workflow,
+                workflow,
+                workflow_execution_id,
+                True,
+                result_queue,
+            ],
+        )
+        thread.start()
+        thread.join()
+        errors, results = result_queue.get()
+
+        self.logger.info(
+            f"Workflow {workflow.workflow_id} ran",
+            extra={"errors": errors, "results": results},
+        )
+
+        status = "success"
+        error = None
+        if any(errors):
+            error = "\n".join(str(e) for e in errors)
+            status = "error"
+
+        return {
+            "workflow_execution_id": workflow_execution_id,
+            "status": status,
+            "error": error,
+            "results": results,
+        }
+
     def handle_manual_event_workflow(
         self, workflow_id, tenant_id, triggered_by_user, alert: AlertDto
     ):
@@ -164,6 +233,7 @@ class WorkflowScheduler:
             },
         )
         with self.lock:
+            alert.trigger = "manual"
             self.workflows_to_run.append(
                 {
                     "workflow_id": workflow_id,
